@@ -711,6 +711,8 @@ class Autotuner:
             config = self.cache[key]
         else:
             config = self.configs[0]
+        if config.pre_hook != None:
+            config.pre_hook(args)
         return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **meta, **config.meta)
 
 
@@ -818,11 +820,14 @@ class Config:
     :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
     :type num_stages: int
+    :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
+                    function are args.
     """
-    def __init__(self, meta, num_warps=4, num_stages=2):
+    def __init__(self, meta, num_warps=4, num_stages=2, pre_hook=None):
         self.meta = meta
         self.num_warps = num_warps
         self.num_stages = num_stages
+        self.pre_hook = pre_hook
 
 
 def autotune(configs, key, reset_to_zero=None):
