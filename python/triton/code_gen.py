@@ -708,7 +708,11 @@ class Autotuner:
                         for config in self.configs}
                 self.cache[key] = builtins.min(timings, key=timings.get)
                 self.hook(args)
+                for config in timings:
+                    print(config.meta)
+                    print(timings[config][0])
             config = self.cache[key]
+            # print(config.meta)
         else:
             config = self.configs[0]
         if config.pre_hook != None:
