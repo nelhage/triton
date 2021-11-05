@@ -685,6 +685,7 @@ class Autotuner:
         self.key_idx = [arg_names.index(k) for k in key]
         self.cache = dict()
         self.kernel = kernel
+        self.args_by_name = arg_names
         # hook to reset all required tensor to zeros before relaunching a kernel
         self.hook = lambda args: 0
         if reset_to_zero is not None:
@@ -726,7 +727,7 @@ class Autotuner:
         else:
             config = self.configs[0]
         if config.pre_hook != None:
-            config.pre_hook(args)
+            config.pre_hook(dict(zip(self.args_by_name, args)))
         return self.kernel(*args, num_warps=config.num_warps, num_stages=config.num_stages, **meta, **config.meta)
 
 
@@ -917,7 +918,11 @@ def heuristics(values):
             def fun(*args, **meta):
                 for v, heur in values.items():
                     assert v not in meta
-                    meta[v] = heur(*args, **meta)
+                    # args_by_name
+                    # print(type(kernel))
+                    # print(type(fn))
+                    args_by_name = {fn.arg_names[idx] : args[idx] for idx in range(len(args))}
+                    meta[v] = heur(args_by_name, **meta)
                 return kernel(*args, **meta)
 
             return fun
