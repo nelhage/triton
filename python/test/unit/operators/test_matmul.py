@@ -3,10 +3,6 @@ import itertools
 import triton
 import torch
 
-def init_to_zero(name):
-    return lambda nargs: nargs[name].zero_()
-
-
 @pytest.mark.parametrize(
     "BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, DTYPE",
     itertools.chain(
@@ -70,10 +66,7 @@ def test_op(BLOCK_M, BLOCK_N, BLOCK_K, SPLIT_K, NWARP, NSTAGE, M, N, K, AT, BT, 
     torch.manual_seed(0)
     # nuke kernel decorators -- will set meta-parameters manually
     META = {'BLOCK_M': BLOCK_M, 'BLOCK_N': BLOCK_N, 'BLOCK_K': BLOCK_K, 'SPLIT_K': SPLIT_K}
-    if SPLIT_K != 1:
-        pre_hook = init_to_zero('C')
-    else:
-        pre_hook = None
+    pre_hook = None if SPLIT_K == 1 else lambda nargs: nargs['C'].zero_()
     configs = [triton.Config(meta=META, num_warps=NWARP, num_stages=NSTAGE, pre_hook=pre_hook)]
     kernel = triton.ops._matmul.kernel
     decorators = kernel.kernel_decorators

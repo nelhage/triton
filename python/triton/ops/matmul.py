@@ -2,10 +2,11 @@ import torch
 import triton.language as tl
 import triton
 
+def init_to_zero(name):
+    return lambda nargs: nargs[name].zero_()
 
-@triton.heuristics({
-    'EVEN_K': lambda args_by_name, **meta: args_by_name['K'] % (meta['BLOCK_K'] * meta['SPLIT_K']) == 0,
-})
+@triton.heuristics({'EVEN_K': lambda nargs, **meta: nargs['K'] % (meta['BLOCK_K'] * meta['SPLIT_K']) == 0})
+# @triton.heuristics({'pre_hook': lambda nargs, **meta: None if meta['SPLIT_K'] == 1 else lambda nargs: nargs['C'].zero_()})
 @triton.autotune(
     configs=[
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=3, num_warps=8),
@@ -18,6 +19,16 @@ import triton
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 64 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
         triton.Config({'BLOCK_M': 32 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 1}, num_stages=5, num_warps=2),
+
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 2}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 64 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_warps=2, pre_hook=init_to_zero('C')),
+
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 2}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 4}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 8}, num_warps=2, pre_hook=init_to_zero('C')),
+        triton.Config({'BLOCK_M': 16 , 'BLOCK_N': 32 , 'BLOCK_K': 32, 'SPLIT_K': 16}, num_warps=2, pre_hook=init_to_zero('C')),
     ],
     key=['M', 'N', 'K'],
 )
@@ -26,7 +37,6 @@ def _kernel(A, B, C, M, N, K,
             stride_am, stride_ak, 
             stride_bk, stride_bn, 
             stride_cm, stride_cn, 
-            # LOCKS,
             **META):
     # extract meta-parameters
     BLOCK_M = META['BLOCK_M']
@@ -108,7 +118,6 @@ class _matmul(torch.autograd.Function):
                       a.stride(0), a.stride(1), 
                       b.stride(0), b.stride(1), 
                       c.stride(0), c.stride(1), 
-                    #   locks, 
                       GROUP_M=8)
         # done
         return c
