@@ -921,7 +921,8 @@ def heuristics(values):
                     # args_by_name
                     # print(type(kernel))
                     # print(type(fn))
-                    args_by_name = {fn.arg_names[idx] : args[idx] for idx in range(len(args))}
+                    # args_by_name = {fn.arg_names[idx] : args[idx] for idx in range(len(args))}
+                    args_by_name = dict(zip(fn.arg_names, args))
                     meta[v] = heur(args_by_name, **meta)
                 return kernel(*args, **meta)
 
