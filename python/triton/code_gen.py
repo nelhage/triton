@@ -787,6 +787,8 @@ class DependenciesFinder(ast.NodeVisitor):
         module = inspect.getmodule(func)
         if module and module.__name__.startswith('triton.'):
             return
+        if inspect.isbuiltin(func):
+            return
         if not hasattr(func, 'hash'):
             src = textwrap.dedent(inspect.getsource(func))
             tree = ast.parse(src)
