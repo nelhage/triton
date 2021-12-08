@@ -30,7 +30,19 @@ ir::value *dispatch::num_programs(int axis, ir::builder *builder) {
 ir::type *integer_promote(ir::type* a_ty, ir::type* b_ty){
   int a_rank = a_ty->get_integer_bitwidth();
   int b_rank = b_ty->get_integer_bitwidth();
-  return a_rank > b_rank ? a_ty : b_ty;
+  auto a_sn = a_ty->get_integer_signedness();
+  auto b_sn = b_ty->get_integer_signedness();
+  // Rules for signedness taken from "Usual arithmetic conversions" on
+  // https://en.cppreference.com/w/c/language/conversion.
+  if (a_sn == b_sn) {
+    return a_rank > b_rank ? a_ty : b_ty;
+  } else if (a_sn == signedness::UNSIGNED) {
+    return a_rank >= b_rank ? a_ty : b_ty;
+  } else if (b_sn == signedness::UNSIGNED) {
+    return b_rank >= a_rank ? b_ty : a_ty;
+  } else {
+    throw_unreachable("integer_promote");
+  }
 }
 
 ir::type *computation_type(ir::type* a_ty, ir::type* b_ty){
@@ -175,7 +187,11 @@ ir::value *dispatch::floordiv(ir::value *input, ir::value *other, ir::builder *b
     ir::type *ret_ty = integer_promote(input_scalar_ty, other_scalar_ty);
     input = dispatch::cast(input, ret_ty, builder);
     other = dispatch::cast(other, ret_ty, builder);
-    return builder->create_sdiv(input, other);
+    if (ret_ty->get_integer_signedness() == signedness::UNSIGNED) {
+      return builder->create_udiv(input, other);
+    } else {
+      return builder->create_sdiv(input, other);
+    }
   }
   return throw_unreachable("floordiv");
 }
