@@ -1,30 +1,62 @@
-import torch
-import triton
-import triton.language as tl
 import copy
-import pytest
-import ast
 import itertools
 
-torch.manual_seed(0)
+import numpy as np
+import pytest
+import torch
+from numpy.random import RandomState
 
-# convert from string to torch.dtype
-# Necessary because doesn't print torch.dtype properly
-cvt = {
-    'bool': torch.bool,
-    'int8': torch.int8,
-    'int16': torch.int16,
-    'int32': torch.int32,
-    'int64': torch.int64,
-    'bfloat16': torch.bfloat16,
-    'float16': torch.float16,
-    'float32': torch.float32,
-    'float64': torch.float64,
-}
+import triton
+import triton.language as tl
+from triton.code_gen import TensorWrapper
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
+uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
 float_dtypes = ['float16', 'float32', 'float64']
-dtypes = int_dtypes + float_dtypes
+dtypes = int_dtypes + uint_dtypes + float_dtypes
+
+def numpy_random(shape, dtype_str):
+    if isinstance(shape, int):
+        shape = (shape, )
+    rs = RandomState(seed=17)
+    dtype = getattr(np, dtype_str)
+    if dtype_str == 'bool':
+        return rs.randint(0, 2, shape, dtype=dtype)
+    elif dtype_str in int_dtypes or dtype_str in uint_dtypes:
+        return rs.randint(1, 32, shape, dtype=dtype)
+    elif dtype_str in float_dtypes:
+        return rs.normal(0, 1, shape, dtype=dtype)
+    else:
+        raise RuntimeError(f'Unknown dtype {dtype_str}')
+
+
+def numpy_to_triton(x: np.ndarray, device='cuda') -> Union[TensorWrapper, torch.Tensor]:
+    t = x.dtype.__name__
+    if t in uint_types:
+        signed_type_name = t.lstrip('u')  # e.g. "uint16" -> "int16"
+        x_signed = x.astype(getattr(np, signed_type))
+        return TensorWrapper(torch.tensor(x_signed, device=device), getattr(tl, t))
+    else:
+        return torch.tensor(x, device=device)
+
+
+def triton_to_numpy(x):
+    if isinstance(x, TensorWrapper):
+        return np.array(x.base, dtype=getattr(np, x.dtype.name))
+    elif isinstance(x, torch.Tensor):
+        return np.array(x, dtype=getattr(np, x.dtype.name))
+    else:
+        raise ValueError(f"Not a triton-compatible tensor: {x}")
+
+
+def triton_empty_like(x):
+    if isinstance(x, TensorWrapper):
+        return TensorWrapper(torch.empty_like(x.base), dtype=x.dtype)
+    elif isinstance(x, torch.Tensor):
+        return torch.empty_like(x)
+    else:
+        raise ValueError(f"Not a triton-compatible tensor: {x}")
+
 
 
 def patch_kernel(template, to_replace):
@@ -34,16 +66,15 @@ def patch_kernel(template, to_replace):
     return kernel
 
 
-@pytest.mark.parametrize("dtype_x", [
-    (dtype_x) for dtype_x in dtypes
-])
+@pytest.mark.parametrize("dtype_x", [dtype_x for dtype_x in dtypes])
 def test_empty_kernel(dtype_x, device='cuda'):
     SIZE = 128
     @triton.jit
     def kernel(X, SIZE: tl.constexpr):
         pass
-    x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
+    x = numpy_to_triton(numpy_random(SIZE, dtype_str=dtype_x), device=device)
     kernel[(1, )](x, SIZE=SIZE, num_warps=4)
+
 
 # generic test functions
 def _test_unary(dtype_x, expr, torch_expr=None, device='cuda'):
@@ -52,21 +83,22 @@ def _test_unary(dtype_x, expr, torch_expr=None, device='cuda'):
     @triton.jit
     def kernel(Z, X, SIZE: tl.constexpr):
         off = tl.arange(0, SIZE)
-        x = tl.load(X + off)
-        z = GENERATE_TEST_HERE
+        x = tl.load(X + off)  # noqa: F841
+        z = GENERATE_TEST_HERE  # noqa: F821
         tl.store(Z + off, z)
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
     # inputs
-    x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
-    if 'log' in expr: x = torch.abs(x) + 0.01
+    x = numpy_random(SIZE, dtype_str=dtype_x)
+    if 'log' in expr:
+        x = np.abs(x) + 0.01
     # reference result
     z_ref = eval(expr if torch_expr is None else torch_expr)
     # triton result
-    z_tri = torch.empty_like(z_ref)
+    z_tri = numpy_to_triton(np.empty_like(z_ref), device=device)
     kernel[(1, )](z_tri, x, SIZE=SIZE, num_warps=4)
     # compare
-    triton.testing.assert_almost_equal(z_ref, z_tri)
+    np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
 
 
 def _test_binary(dtype_x, dtype_y, expr, mode_x='real', mode_y='real', device='cuda'):
@@ -75,15 +107,15 @@ def _test_binary(dtype_x, dtype_y, expr, mode_x='real', mode_y='real', device='c
     @triton.jit
     def kernel(Z, X, Y, SIZE: tl.constexpr):
         off = tl.arange(0, SIZE)
-        x = tl.load(X + off)
-        y = tl.load(Y + off)
+        x = tl.load(X + off)  # noqa: F841 
+        y = tl.load(Y + off)  # noqa: F841 
         z = GENERATE_TEST_HERE
         tl.store(Z + off, z)
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
     # inputs
-    x = triton.testing.random(SIZE, dtype=cvt[dtype_x], device=device)
-    y = triton.testing.random(SIZE, dtype=cvt[dtype_y], device=device)
+    x = random(SIZE, dtype_str=dtype_x, device=device)
+    y = random(SIZE, dtype_str=dtype_y, device=device)
     if mode_x == 'nan': x[:] = float('nan')
     if mode_y == 'nan': y[:] = float('nan')
     # reference result
@@ -218,7 +250,7 @@ def test_index1d(expr, device='cuda'):
     kernel = patch_kernel(kernel, to_replace)
 
     # torch result
-    x = triton.testing.random(shape_x, dtype=dtype, device=device)
+    x = random(shape_x, dtype_str=dtype, device=device)
     y = torch.zeros(shape_z, dtype=dtype, device=device)
     z_ref = eval(expr) + y
     # triton result
@@ -283,8 +315,7 @@ def test_tuples():
     ('min', 'int32', mode), ('min', 'float32', mode),\
     ]
     for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']]))
-def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
-    dtype_x = cvt[dtype_x]
+def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
     n_programs = 5
 
     # triton kernel
@@ -296,12 +327,12 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x)'})
     torch_op = {'add': torch.sum, 'max': torch.max, 'min': torch.min}[op]
-    max_neutral = float('-inf') if dtype_x.is_floating_point else torch.iinfo(dtype_x).min
-    min_neutral = float('inf') if dtype_x.is_floating_point else torch.iinfo(dtype_x).max
+    max_neutral = float('-inf') if dtype_x_str in float_dtypes else torch.iinfo(getattr(dtype_x).min
+    min_neutral = float('inf') if dtype_x_str in float_dtypes else torch.iinfo(dtype_x).max
     neutral = {'add': 0, 'max': max_neutral, 'min': min_neutral}[op]
 
     # triton result
-    x_tri = triton.testing.random((n_programs, ), dtype=dtype_x, device=device)
+    x_tri = random((n_programs, ), dtype_str=dtype_x_str, device=device)
     if mode == 'all_neg':
         x_tri = -torch.abs(x_tri)
     if mode == 'all_pos':
@@ -339,7 +370,7 @@ def test_atomic_rmw(op, dtype_x, mode, device='cuda'):
     ('float32', 'int32', True)
 ])
 def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
-    x0 = 43 if dtype_x.startswith('int') else 43.5
+    x0 = 43 if dtype_x in int_dtypes else 43.5
     x = torch.tensor([x0], dtype=cvt[dtype_x], device=device)
 
     # triton kernel
@@ -368,8 +399,7 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
   [(dtype, shape) \
         for dtype in dtypes\
         for shape in [128, 512]])
-def test_reduce1d(dtype, shape, device='cuda'):
-    dtype = cvt[dtype]
+def test_reduce1d(dtype_str, shape, device='cuda'):
 
     # triton kernel
     @triton.jit
@@ -377,9 +407,9 @@ def test_reduce1d(dtype, shape, device='cuda'):
         x = tl.load(X + tl.arange(0, BLOCK))
         tl.store(Z, tl.sum(x, axis=0))
 
-    x = triton.testing.random((shape,), dtype=dtype, device=device)
+    x = random((shape,), dtype_str=dtype_str, device=device)
     # triton result
-    z_tri = triton.testing.random((1,), dtype=dtype, device=device)
+    z_tri = random((1,), dtype_str=dtype_str, device=device)
     kernel[(1,)](x, z_tri, BLOCK=shape)
     # torch result
     z_ref = torch.sum(x).to(dtype)
@@ -391,8 +421,7 @@ def test_reduce1d(dtype, shape, device='cuda'):
   [(dtype, shape, 1) \
         for dtype in ['float32']\
         for shape in [(1, 1024)]])
-def test_reduce2d(dtype, shape, axis, device='cuda'):
-    dtype = cvt[dtype]
+def test_reduce2d(dtype_str, shape, axis, device='cuda'):
     # triton kernel
     @triton.jit
     def kernel(X, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, AXIS: tl.constexpr):
@@ -402,7 +431,7 @@ def test_reduce2d(dtype, shape, axis, device='cuda'):
         z = tl.sum(x, axis=AXIS)
         tl.store(Z + range_m, z)
     # input
-    x = triton.testing.random(shape, dtype=dtype, device=device)
+    x = random(shape, dtype_str=dtype_str, device=device)
     # triton result
     z_tri = torch.empty((shape[0],), dtype=dtype, device=device)
     kernel[(1,)](x, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis)
@@ -415,17 +444,13 @@ def test_reduce2d(dtype, shape, axis, device='cuda'):
 # test permute
 # ---------------
 
-# ---------------
-# test permute
-# ---------------
-
 @pytest.mark.parametrize("dtype, shape, perm",
   [(dtype, shape, perm) \
         for dtype in ['float32']\
         for shape in [(128, 128)]\
         for perm  in [(1, 0)]])
-def test_permute(dtype, shape, perm, device='cuda'):
-    dtype = cvt[dtype]
+def test_permute(dtype_str, shape, perm, device='cuda'):
+
     # triton kernel
     @triton.jit
     def kernel(X, stride_xm, stride_xn, 
@@ -437,7 +462,7 @@ def test_permute(dtype, shape, perm, device='cuda'):
         Zs = Z + off_m[:, None] * stride_zm + off_n[None, :] * stride_zn
         tl.store(Zs, tl.load(Xs))
     # input
-    x = triton.testing.random(shape, dtype=dtype, device=device)
+    x = random(shape, dtype_str=dtype_str, device=device)
     # triton result
     z_tri = torch.empty_like(x)
     pgm = kernel[(1, 1)](x, x.stride(0), x.stride(1), 
@@ -457,7 +482,7 @@ def test_permute(dtype, shape, perm, device='cuda'):
 # ---------------
 
 @pytest.mark.parametrize("epilogue", ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols'])
-def test_dot(epilogue, dtype=torch.float32, device='cuda'):
+def test_dot(epilogue, device='cuda'):
     torch.manual_seed(0)
     # triton kernel
     @triton.jit
@@ -484,10 +509,10 @@ def test_dot(epilogue, dtype=torch.float32, device='cuda'):
         tl.store(Zs, z)
     # input
     M, N, K = 64, 64, 32
-    x = triton.testing.random((M, K), dtype=dtype, device=device)
-    y = triton.testing.random((K, N), dtype=dtype, device=device)
+    x = random((M, K), dtype_str='float32', device=device)
+    y = random((K, N), dtype_str='float32', device=device)
     # triton result
-    z = triton.testing.random((M, N), dtype=dtype, device=device)
+    z = random((M, N), dtype_str='float32', device=device)
     z_tri = z.clone()
     if epilogue == 'trans':
         z_tri = torch.as_strided(z_tri, (M, N), z_tri.stride()[::-1])
@@ -665,5 +690,5 @@ def test_noop(device='cuda'):
     @triton.jit
     def kernel(x):
         pass
-    x = triton.testing.random((1,), dtype=torch.int32, device=device)
+    x = random((1,), dtype_str='int32', device=device)
     kernel[(1, )](x)
