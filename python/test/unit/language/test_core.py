@@ -125,15 +125,17 @@ def _test_binary(dtype_x, dtype_y, expr, mode_x='real', mode_y='real', device='c
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
     # inputs
-    x = random(SIZE, dtype_str=dtype_x, device=device)
-    y = random(SIZE, dtype_str=dtype_y, device=device)
+    x = numpy_random(SIZE, dtype_str=dtype_x)
+    y = numpy_random(SIZE, dtype_str=dtype_y)
     if mode_x == 'nan': x[:] = float('nan')
     if mode_y == 'nan': y[:] = float('nan')
     # reference result
     z_ref = eval(expr)
     # triton result
+    x_tri = numpy_to_triton(x, device=device)
+    y_tri = numpy_to_triton(y, device=device)
     z_tri = numpy_to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
-    kernel[(1, )](z_tri, x, y, SIZE=SIZE, num_warps=4)
+    kernel[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4)
     # compare
     np.testing.assert_allclose(z_ref, triton_to_numpy(z_tri), err_msg=expr, rtol=0.01)
 
@@ -162,7 +164,11 @@ def test_bin_op(dtype_x, dtype_y, expr, device='cuda'):
 ])
 def test_bitwise_op(dtype_x, dtype_y, expr, device='cuda'):
     if 'float' in dtype_x + dtype_y:
-        with pytest.raises(RuntimeError):
+        with pytest.raises(TypeError):
+            _test_binary(dtype_x, dtype_y, expr, device=device)
+    elif (dtype_x == 'uint64'  and dtype_y in int_dtypes) or (dtype_x in int_dtypes and dtype_y == 'uint64'):
+        # TODO(madeleine): Make sure Triton raises an error. This one is from numpy.
+        with pytest.raises(TypeError):
             _test_binary(dtype_x, dtype_y, expr, device=device)
     else:
         _test_binary(dtype_x, dtype_y, expr, device=device)
