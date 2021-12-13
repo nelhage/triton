@@ -1,5 +1,6 @@
 import copy
 import itertools
+from typing import Union
 
 import numpy as np
 import pytest
@@ -25,26 +26,35 @@ def numpy_random(shape, dtype_str):
     elif dtype_str in int_dtypes or dtype_str in uint_dtypes:
         return rs.randint(1, 32, shape, dtype=dtype)
     elif dtype_str in float_dtypes:
-        return rs.normal(0, 1, shape, dtype=dtype)
+        return rs.normal(0, 1, shape)
     else:
         raise RuntimeError(f'Unknown dtype {dtype_str}')
 
 
 def numpy_to_triton(x: np.ndarray, device='cuda') -> Union[TensorWrapper, torch.Tensor]:
-    t = x.dtype.__name__
-    if t in uint_types:
+    t = x.dtype.name
+    if t in uint_dtypes:
         signed_type_name = t.lstrip('u')  # e.g. "uint16" -> "int16"
-        x_signed = x.astype(getattr(np, signed_type))
+        x_signed = x.astype(getattr(np, signed_type_name))
         return TensorWrapper(torch.tensor(x_signed, device=device), getattr(tl, t))
     else:
         return torch.tensor(x, device=device)
 
 
+def torch_dtype_name(dtype) -> str:
+    if isinstance(dtype, triton.language.dtype):
+        return dtype.name
+    elif isinstance(dtype, torch.dtype):
+        return str(dtype).split('.')[1]  # 'torch.int64' -> 'int64'
+    else:
+        raise TypeError(f'not a triton or torch dtype: {type(dtype)}')
+
+
 def triton_to_numpy(x):
     if isinstance(x, TensorWrapper):
-        return np.array(x.base, dtype=getattr(np, x.dtype.name))
+        return np.array(x.base.cpu(), dtype=getattr(np, torch_dtype_name(x.dtype)))
     elif isinstance(x, torch.Tensor):
-        return np.array(x, dtype=getattr(np, x.dtype.name))
+        return np.array(x.cpu(), dtype=getattr(np, torch_dtype_name(x.dtype)))
     else:
         raise ValueError(f"Not a triton-compatible tensor: {x}")
 
@@ -91,14 +101,15 @@ def _test_unary(dtype_x, expr, torch_expr=None, device='cuda'):
     # inputs
     x = numpy_random(SIZE, dtype_str=dtype_x)
     if 'log' in expr:
-        x = np.abs(x) + 0.01
+        x = np.abs(x_np) + 0.01
     # reference result
     z_ref = eval(expr if torch_expr is None else torch_expr)
     # triton result
+    x_tri = numpy_to_triton(x, device=device)
     z_tri = numpy_to_triton(np.empty_like(z_ref), device=device)
-    kernel[(1, )](z_tri, x, SIZE=SIZE, num_warps=4)
+    kernel[(1, )](z_tri, x_tri, SIZE=SIZE, num_warps=4)
     # compare
-    np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
+    np.testing.assert_allclose(z_ref, triton_to_numpy(z_tri), rtol=0.01)
 
 
 def _test_binary(dtype_x, dtype_y, expr, mode_x='real', mode_y='real', device='cuda'):
@@ -121,10 +132,10 @@ def _test_binary(dtype_x, dtype_y, expr, mode_x='real', mode_y='real', device='c
     # reference result
     z_ref = eval(expr)
     # triton result
-    z_tri = torch.empty(SIZE, dtype=z_ref.dtype, device=device)
+    z_tri = numpy_to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
     kernel[(1, )](z_tri, x, y, SIZE=SIZE, num_warps=4)
     # compare
-    triton.testing.assert_almost_equal(z_ref, z_tri, err_msg=expr)
+    np.testing.assert_allclose(z_ref, triton_to_numpy(z_tri), err_msg=expr, rtol=0.01)
 
 
 # ---------------
@@ -185,7 +196,7 @@ def test_compare_op(dtype_x, dtype_y, expr, mode_x, mode_y, device='cuda'):
 # test unary ops
 # ---------------
 @pytest.mark.parametrize("dtype_x, expr", [
-    (dtype_x, f' -x') for dtype_x in float_dtypes
+    (dtype_x, f' -x') for dtype_x in dtypes
 ] + [\
     (dtype_x, f' ~x') for dtype_x in int_dtypes
      ])
@@ -309,7 +320,7 @@ def test_tuples():
 # ---------------
 # test atomics
 # ---------------
-@pytest.mark.parametrize("op, dtype_x, mode", itertools.chain.from_iterable([
+@pytest.mark.parametrize("op, dtype_x_str, mode", itertools.chain.from_iterable([
     [('add', 'int32', mode), ('add', 'float16', mode), ('add', 'float32', mode), \
     ('max', 'int32', mode), ('max', 'float32', mode),\
     ('min', 'int32', mode), ('min', 'float32', mode),\
@@ -327,7 +338,7 @@ def test_atomic_rmw(op, dtype_x_str, mode, device='cuda'):
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': f'tl.atomic_{op}(Z, x)'})
     torch_op = {'add': torch.sum, 'max': torch.max, 'min': torch.min}[op]
-    max_neutral = float('-inf') if dtype_x_str in float_dtypes else torch.iinfo(getattr(dtype_x).min
+    max_neutral = float('-inf') if dtype_x_str in float_dtypes else torch.iinfo(dtype_x).min
     min_neutral = float('inf') if dtype_x_str in float_dtypes else torch.iinfo(dtype_x).max
     neutral = {'add': 0, 'max': max_neutral, 'min': min_neutral}[op]
 
@@ -395,7 +406,7 @@ def test_cast(dtype_x, dtype_z, bitcast, device='cuda'):
 # ---------------
 # test reduce
 # ---------------
-@pytest.mark.parametrize("dtype, shape", 
+@pytest.mark.parametrize("dtype_str, shape", 
   [(dtype, shape) \
         for dtype in dtypes\
         for shape in [128, 512]])
@@ -417,7 +428,7 @@ def test_reduce1d(dtype_str, shape, device='cuda'):
     triton.testing.assert_almost_equal(z_tri, z_ref)
 
 
-@pytest.mark.parametrize("dtype, shape, axis", 
+@pytest.mark.parametrize("dtype_str, shape, axis", 
   [(dtype, shape, 1) \
         for dtype in ['float32']\
         for shape in [(1, 1024)]])
@@ -444,7 +455,7 @@ def test_reduce2d(dtype_str, shape, axis, device='cuda'):
 # test permute
 # ---------------
 
-@pytest.mark.parametrize("dtype, shape, perm",
+@pytest.mark.parametrize("dtype_str, shape, perm",
   [(dtype, shape, perm) \
         for dtype in ['float32']\
         for shape in [(128, 128)]\
@@ -690,5 +701,5 @@ def test_noop(device='cuda'):
     @triton.jit
     def kernel(x):
         pass
-    x = random((1,), dtype_str='int32', device=device)
+    x = numpy_to_triton(numpy_random((1,), dtype_str='int32'), device=device)
     kernel[(1, )](x)

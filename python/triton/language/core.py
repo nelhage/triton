@@ -68,12 +68,19 @@ class dtype:
     def __init__(self, init):
         self.init = init
 
+    @property
+    def name(self) -> str:
+        n = self.init.__name__
+        pfx = 'get_'
+        assert n.startswith(pfx)
+        return n[len(pfx):]
+
     def handle(self, builder):
         ctx = builder.context
         return self.init(ctx)
 
     def __str__(self):
-        return f"dtype({self.init.__name__})"
+        return f"dtype(self.name)"
 
 
 class pointer_dtype:
