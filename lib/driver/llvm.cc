@@ -158,37 +158,7 @@ std::string llir_to_ptx(llvm::Module* module, int cc, int version){
 }
 
 std::string ptx_to_cubin(const std::string& ptx, int cc) {
-  std::string ptxas = "ptxas";
-  std::string version;
-  int use_system_ptxas = tools::exec(ptxas + " --version 2>&1", version) == 0;
-  if(!use_system_ptxas)
     return "";
-
-  // compile ptx with ptxas
-  char _fsrc[] = "/tmp/triton_k_XXXXXX";
-  char _flog[] = "/tmp/triton_l_XXXXXX";
-  mkstemp(_fsrc);
-  mkstemp(_flog);
-  std::string fsrc = _fsrc;
-  std::string flog = _flog;
-  std::string fbin = fsrc + ".o";
-  const char* _fbin = fbin.c_str();
-  std::ofstream ofs(fsrc);
-  ofs << ptx;
-  ofs.close();
-  std::string cmd;
-  int err;
-  cmd = ptxas + " -v --gpu-name=sm_" + std::to_string(cc) + " " + fsrc + " -o " + fsrc + ".o 2> " + flog;
-  err = system(cmd.c_str());
-  CUmodule ret;
-  std::ifstream _cubin(_fbin, std::ios::binary );
-  std::string cubin(std::istreambuf_iterator<char>(_cubin), {});
-  _cubin.close();
-  dispatch::cuModuleLoadData(&ret, cubin.c_str());
-  unlink(_fsrc);
-  unlink(_flog);
-  unlink(_fbin);
-  return cubin;
 }
 
 CUmodule ptx_to_cumodule(const std::string& ptx, int cc) {
@@ -197,7 +167,7 @@ CUmodule ptx_to_cumodule(const std::string& ptx, int cc) {
     // use ptxas if present in PATH. Otherwise, use JIT from the driver
     std::string ptxas = "ptxas";
     std::string version;
-    int use_system_ptxas = tools::exec(ptxas + " --version 2>&1", version) == 0;
+    int use_system_ptxas = 0;
 
     // Use PTXAS via system call
     if(use_system_ptxas){
@@ -360,4 +330,3 @@ hipModule_t amdgpu_to_hipmodule(const std::string& path) {
 
 }
 }
-
