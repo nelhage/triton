@@ -1,5 +1,6 @@
 #include "triton/ir/dispatch.h"
 #include <iostream>
+#include <sstream>
 
 namespace triton{
 namespace ir{
@@ -293,8 +294,13 @@ ir::value *dispatch::greater_than(ir::value *input, ir::value *other, ir::builde
   if (scalar_ty->is_floating_point_ty())
     return builder->create_fcmpOGT(input, other);
   // int > int
-  else if (scalar_ty->is_integer_ty())
-    return builder->create_icmpSGT(input, other);
+  else if (scalar_ty->is_integer_ty()) {
+    if (scalar_ty->get_integer_signedness() == signedness::UNSIGNED) {
+      return builder->create_icmpUGT(input, other);
+    } else {
+      return builder->create_icmpSGT(input, other);
+    }
+  }
   return throw_unreachable("greater_than");
 }
 
@@ -305,8 +311,13 @@ ir::value *dispatch::greater_equal(ir::value *input, ir::value *other, ir::build
   if (scalar_ty->is_floating_point_ty())
     return builder->create_fcmpOGE(input, other);
   // int >= int
-  else if (scalar_ty->is_integer_ty())
-    return builder->create_icmpSGE(input, other);
+  else if (scalar_ty->is_integer_ty()) {
+    if (scalar_ty->get_integer_signedness() == signedness::UNSIGNED) {
+      return builder->create_icmpUGE(input, other);
+    } else {
+      return builder->create_icmpSGE(input, other);
+    }
+  }
   return throw_unreachable("greater_equal");
 }
 
@@ -317,8 +328,13 @@ ir::value *dispatch::less_than(ir::value *input, ir::value *other, ir::builder *
   if (scalar_ty->is_floating_point_ty())
     return builder->create_fcmpOLT(input, other);
   // int < int
-  else if (scalar_ty->is_integer_ty())
-    return builder->create_icmpSLT(input, other);
+  else if (scalar_ty->is_integer_ty()) {
+    if (scalar_ty->get_integer_signedness() == signedness::UNSIGNED) {
+      return builder->create_icmpULT(input, other);
+    } else {
+      return builder->create_icmpSLT(input, other);
+    }
+  }
   return throw_unreachable("less_than");
 }
 
@@ -329,8 +345,13 @@ ir::value *dispatch::less_equal(ir::value *input, ir::value *other, ir::builder 
   if (scalar_ty->is_floating_point_ty())
     return builder->create_fcmpOLE(input, other);
   // int < int
-  else if (scalar_ty->is_integer_ty())
-    return builder->create_icmpSLE(input, other);
+  else if (scalar_ty->is_integer_ty()) {
+    if (scalar_ty->get_integer_signedness() == signedness::UNSIGNED) {
+      return builder->create_icmpULE(input, other);
+    } else {
+      return builder->create_icmpSLE(input, other);
+    }
+  }
   return throw_unreachable("less_equal");
 }
 
@@ -478,8 +499,10 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
     return builder->create_fp_ext(input, dst_ty);
   // Int cast
   if (src_sca_ty->is_integer_ty() && dst_sca_ty->is_integer_ty() &&
-      src_sca_ty->get_integer_bitwidth() != dst_sca_ty->get_integer_bitwidth())
-    return builder->create_int_cast(input, dst_ty, src_sca_ty != builder->get_int1_ty());
+      (src_sca_ty->get_integer_bitwidth() != dst_sca_ty->get_integer_bitwidth() || src_sca_ty->get_integer_signedness() != dst_sca_ty->get_integer_signedness())) {
+    bool sign_extend = src_sca_ty->get_integer_signedness() == signedness::SIGNED && src_sca_ty != builder->get_int1_ty();
+    return builder->create_int_cast(input, dst_ty, sign_extend);
+  }
   // Float -> Int
   if (src_sca_ty->is_floating_point_ty() && dst_sca_ty->is_integer_ty()){
     if(dst_sca_ty->is_bool_ty())
@@ -510,7 +533,9 @@ ir::value *dispatch::cast(ir::value *input, ir::type *dst_ty, ir::builder *build
       other = builder->create_splat(other, src_ty->get_block_shapes());
     return builder->create_icmpNE(input, other);
   }
-  return throw_unreachable("cast");
+  std::ostringstream ss;
+  ss << "cast1 from " << src_sca_ty->repr() << " to " << dst_sca_ty->repr();
+  return throw_unreachable(ss.str());
 }
 
 //===----------------------------------------------------------------------===//

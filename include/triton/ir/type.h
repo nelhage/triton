@@ -142,7 +142,7 @@ public:
       case LabelTyID: return "label";
       case MetadataTyID: return "md";
       case TokenTyID: return "tok";
-      case IntegerTyID: return "i" + std::to_string(get_integer_bitwidth());
+      case IntegerTyID: return (get_integer_signedness() == signedness::UNSIGNED ? "u" : "i") + std::to_string(get_integer_bitwidth());
       case FunctionTyID: return "fn";
       case PointerTyID: return get_pointer_element_ty()->repr() + "*";
       case StructTyID: return "struct";

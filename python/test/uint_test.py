@@ -53,6 +53,8 @@ def sgn_kernel(X, S, N, BLOCK_SIZE: tl.constexpr):
     mask = offsets < N
     xx = tl.load(X + offsets, mask=mask)
     ss = tl.where(xx > 0, 1, tl.where(xx < 0, -1, 0))
+    print('xx', xx)
+    print('ss', ss)
     tl.store(S + offsets, ss, mask=mask)
 
 
@@ -67,7 +69,7 @@ def sgn(x, block_size=32):
     return s
 
 
-def test_cast() -> None:
+def test_sgn() -> None:
     x = torch.tensor([0xFFFE, 12, -6, 0], dtype=torch.int16, device="cuda")
     s = sgn(x)
     assert all(s == torch.tensor([-1, 1, -1, 0], device="cuda"))
@@ -79,9 +81,36 @@ def test_cast() -> None:
     assert all(s == torch.tensor([1, 1, 0], device="cuda", dtype=torch.int32))
 
 
+@triton.jit
+def mul_kernel(X, Y, Z, N, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < N
+    xx = tl.load(X + offsets, mask=mask)
+    yy = tl.load(Y + offsets, mask=mask)
+    zz = xx * yy
+    tl.store(Z + offsets, zz, mask=mask)
+
+
+def test_mul() -> None:
+    n = 3
+    x = triton.reinterpret(
+        torch.tensor([0xFFFE, 12, 0], dtype=torch.int16, device="cuda"), dtype=tl.uint16
+    )
+    y = torch.tensor([1, 2, 3], dtype=torch.int16, device="cuda")
+    z = torch.zeros((n,), dtype=torch.int32, device="cuda")
+    z = sgn(x)
+
+    def grid3(meta):
+        return (triton.cdiv(n, meta["BLOCK_SIZE"]),)
+
+    mul_kernel[grid3](x, y, z, n, BLOCK_SIZE=8)
+
+
 def main():
     test_div()
     test_cast()
+    test_mul()
 
 
 if __name__ == "__main__":

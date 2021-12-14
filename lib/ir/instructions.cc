@@ -232,6 +232,8 @@ icmp_inst::icmp_inst(type *ty, cmp_pred_t pred,
 
 icmp_inst* icmp_inst::create(cmp_pred_t pred, value *lhs, value *rhs, const std::string &name, instruction *next){
   assert(is_int_predicate(pred));
+  assert(lhs->get_type() == rhs->get_type());
+  std::cerr << "CMP " << pred - FIRST_ICMP_PREDICATE << " " << lhs->get_type()->repr() << std::endl;
   type *res_ty = make_cmp_result_type(lhs->get_type());
   return new icmp_inst(res_ty, pred, lhs, rhs, name, next);
 }

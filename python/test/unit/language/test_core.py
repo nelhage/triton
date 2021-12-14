@@ -121,6 +121,7 @@ def _test_binary(dtype_x, dtype_y, expr, mode_x='real', mode_y='real', device='c
         x = tl.load(X + off)  # noqa: F841 
         y = tl.load(Y + off)  # noqa: F841 
         z = GENERATE_TEST_HERE
+        print('x', x, 'y', y, 'z', z)
         tl.store(Z + off, z)
 
     kernel = patch_kernel(kernel, {'GENERATE_TEST_HERE': expr})
@@ -137,6 +138,7 @@ def _test_binary(dtype_x, dtype_y, expr, mode_x='real', mode_y='real', device='c
     z_tri = numpy_to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
     kernel[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4)
     # compare
+    print('z_tri.dtype', z_tri.dtype, type(z_tri), 'z_ref.dtype', z_ref.dtype, type(z_ref))
     np.testing.assert_allclose(z_ref, triton_to_numpy(z_tri), err_msg=expr, rtol=0.01)
 
 
@@ -144,7 +146,7 @@ def _test_binary(dtype_x, dtype_y, expr, mode_x='real', mode_y='real', device='c
 # test binary ops
 # ---------------
 @pytest.mark.parametrize("dtype_x, dtype_y, expr", [
-    (dtype_x, dtype_y, f' x {op} y') \
+    (dtype_x, dtype_y, f'x{op}y') \
   for op in ['+', '-', '*', '/', '%'] \
   for dtype_x in dtypes \
   for dtype_y in dtypes

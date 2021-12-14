@@ -80,7 +80,7 @@ class dtype:
         return self.init(ctx)
 
     def __str__(self):
-        return f"dtype(self.name)"
+        return self.name
 
 
 class pointer_dtype:
@@ -145,6 +145,10 @@ class block:
             self.numel *= s
         # Data-type wrapper
         self.dtype = block._init_dtype(self.handle.type.scalar)
+
+    def __str__(self) -> str:
+        # e.x. "float32[3,4]"
+        return str(self.dtype) + '[' + ','.join(str(s) for s in self.shape) + ']'
 
     @builtin
     def __add__(self, other, _builder=None):
